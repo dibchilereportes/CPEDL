@@ -1,0 +1,61 @@
+name: Actualizar datos logísticos CPEDL
+
+# Cuándo se ejecuta
+on:
+  schedule:
+    # Dos ejecuciones diarias. Las horas están en UTC.
+    # Base: horario de invierno de Chile (UTC−4). En verano (UTC−3)
+    # correrán una hora más tarde en hora local.
+    - cron: '30 12 * * *'   # 12:30 UTC = 08:30 Chile (invierno)
+    - cron: '0 16 * * *'    # 16:00 UTC = 12:00 Chile (invierno)
+  workflow_dispatch:        # permite ejecutarlo a mano desde la pestaña Actions
+
+# Permisos para publicar en GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Generar el HTML con datos frescos de Odoo
+        env:
+          CPEDL_ENTORNO: nube
+          ODOO_URL_MAESTRA: ${{ secrets.ODOO_URL_MAESTRA }}
+          ODOO_URL_STOCK:   ${{ secrets.ODOO_URL_STOCK }}
+          ODOO_URL_VENTAS:  ${{ secrets.ODOO_URL_VENTAS }}
+        run: python actualizar_datos_logisticos.py
+
+      - name: Preparar carpeta de publicación
+        run: |
+          mkdir -p _site
+          cp index.html _site/index.html
+
+      - name: Subir artefacto para Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publicar en GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
