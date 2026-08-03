@@ -1,0 +1,14 @@
+# URLs de Odoo — NUNCA subir al repositorio (van como GitHub Secrets)
+URL MAESTRA PRODUCTOS.txt
+URL STOCKXBODEGA.txt
+URL VENTAS DETALLE.txt
+
+# Archivos generados (se regeneran en cada ejecución)
+datos_logisticos.html
+datos_logisticos.json
+index.html
+actualizar_log.txt
+
+# Temporales de Python
+__pycache__/
+*.pyc
