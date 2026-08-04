@@ -16,7 +16,14 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:14px;-webkit-tap-highlight-color:transparent}
 body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:100vh}
-.topbar{position:sticky;top:0;z-index:200;background:var(--sur);border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:10px;padding:0 14px;height:48px}
+.topbar{position:sticky;top:0;z-index:200;background:var(--sur);border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:14px;padding:0 16px;height:64px}
+.brand{display:flex;align-items:center;gap:14px;flex-shrink:0}
+.brand-logo{height:44px;width:auto;display:block}
+.brand-divider{width:1px;height:38px;background:var(--brd)}
+.brand-txt{display:flex;flex-direction:column;line-height:1.15;gap:2px}
+.brand-cpedl{font-family:var(--mono);font-size:19px;font-weight:600;color:var(--acc);letter-spacing:2px}
+.brand-full{font-size:9.5px;color:var(--mut);letter-spacing:.2px;max-width:230px;line-height:1.3}
+.brand-cred{font-size:7.5px;color:var(--brd2);white-space:nowrap;align-self:flex-end;margin-left:6px;letter-spacing:.3px}
 .logo{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--acc);white-space:nowrap}
 .top-status{font-size:11px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
 .top-right{display:flex;gap:6px;align-items:center;flex-shrink:0}
@@ -37,7 +44,7 @@ body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:10
 .chip:hover{border-color:var(--acc);color:var(--acc)}
 .chip.on{background:var(--acc-bg);border-color:var(--acc);color:var(--acc)}
 .chip.warn.on{background:var(--amb-bg);border-color:var(--amb);color:var(--amb)}
-.app{display:flex;flex-direction:column;height:calc(100vh - 48px)}
+.app{display:flex;flex-direction:column;height:calc(100vh - 64px)}
 .split{display:flex;flex:1;overflow:hidden}
 .list-col{width:300px;min-width:260px;border-right:1px solid var(--brd);display:flex;flex-direction:column;background:var(--sur);flex-shrink:0}
 .res-header{padding:7px 12px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--brd);display:flex;align-items:center;justify-content:space-between}
@@ -157,11 +164,20 @@ body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:10
 </head>
 <body>
 <div class="topbar">
-  <div class="logo">DATOS·LOG</div>
+  <div class="brand">
+    <img src="Imagen1.png" alt="DIB Carpet & Home" class="brand-logo" onerror="this.style.display='none'">
+    <div class="brand-divider"></div>
+    <div class="brand-txt">
+      <span class="brand-cpedl">CPEDL</span>
+      <span class="brand-full">Capturador y Propagador Eficiente de Datos Logísticos</span>
+    </div>
+    <span class="brand-cred">Creado por F.G.I.</span>
+  </div>
   <div class="sep"></div>
   <div class="top-status" id="ts">Cargando…</div>
   <div class="top-right">
     <button class="btn btn-sm" onclick="openBod()">🏭 Bodegas</button>
+    <button class="btn btn-sm" id="btn-rec" onclick="openRecepcion()">📥 Recepción</button>
     <button class="btn btn-sm" id="btn-inf" onclick="openInforme()">📋 Informe</button>
     <button class="btn btn-sm btn-primary" id="btn-exp" onclick="exportXlsx()" style="display:none">↓ Exportar XLSX</button>
   </div>
@@ -381,6 +397,19 @@ const S = {
 const BOD_KEY = 'dlog_bod_v3';
 const MARKS_KEY = 'dlog_marks_v1';   // marcas de medido/estimado por referencia
 const AUDIT_KEY = 'dlog_audit_v1';   // registro de correcciones para el informe
+const RECEP_KEY = 'dlog_recep_v1';   // recepciones cargadas (reporte de contenedores)
+
+// Recepciones cargadas desde el reporte de transferencias/stock picking.
+// Estructura: { contactos:{ contacto:{ docs:{ docOrigen:{ refs:[{ref,nom,demanda}], fecha } } } }, activa:{contacto,doc} }
+// Se guarda en localStorage para que persista entre sesiones del navegador.
+let RECEP = { contactos:{}, activa:null };
+function loadRecep(){
+  try { RECEP = JSON.parse(localStorage.getItem(RECEP_KEY)||'null') || { contactos:{}, activa:null }; }
+  catch(e){ RECEP = { contactos:{}, activa:null }; }
+}
+function saveRecep(){
+  try { localStorage.setItem(RECEP_KEY, JSON.stringify(RECEP)); } catch(e){}
+}
 
 // Registro de correcciones de auditoría en localStorage.
 // Cada entrada guarda el valor ORIGINAL (el que venía de Odoo) y el CORREGIDO,
@@ -436,7 +465,8 @@ function registrarCorreccion(r, snapshotAntes, origen){
   }
   AUDIT[r[0]] = {
     nom: nom(r), sub: sub(r), med: med(r), lin: lin(r),
-    campos, ts: new Date().toISOString(), origen: origen||'manual'
+    campos, ts: new Date().toISOString(), origen: origen||'manual',
+    recep: (RECEP.activa ? {contacto:RECEP.activa.contacto, doc:RECEP.activa.doc} : null)
   };
   saveAudit();
 }
@@ -514,6 +544,7 @@ setTimeout(function() {
   // Reaplica marcas de medido/estimado guardadas en el navegador
   loadMarks();
   loadAudit();   // carga el registro de correcciones para el informe
+  loadRecep();   // carga recepciones cargadas previamente
   for(const r of S.recs){
     const m = MARKS[r[0]];
     if(m==='med'){ r._med=true; r._est=false; }
@@ -532,6 +563,7 @@ setTimeout(function() {
   document.getElementById('btn-exp').style.display = 'inline-flex';
   applyFilter();
   updateProg();
+  updateRecepBanner();   // refleja recepción activa si quedó de una sesión previa
 
   // Event delegation para clicks en la lista de productos
   document.getElementById('res-list').addEventListener('click', function(ev){
@@ -585,8 +617,9 @@ function applyFilter(){
   const q = document.getElementById('search').value.toLowerCase().trim();
   const f = S.filter;
 
-  // Sin bodegas seleccionadas → no mostrar nada (pedir elegir bodega)
-  if(!S.activeBod.size){
+  // Sin bodegas seleccionadas → no mostrar nada (pedir elegir bodega),
+  // EXCEPTO si hay una recepción activa (esa define su propia lista de productos).
+  if(!S.activeBod.size && !(RECEP.activa && RECEP.activa.refs)){
     S.filtered = [];
     S.rIdx = 0;
     document.getElementById('res-list').innerHTML =
@@ -604,8 +637,15 @@ function applyFilter(){
            !sub(r).toLowerCase().includes(q) &&
            !med(r).toLowerCase().includes(q)) return false;
 
-    // Filtro base por bodega: producto debe tener stock en las bodegas elegidas
-    if(totalStk(r) <= 0) return false;
+    // Filtro por RECEPCIÓN activa: solo productos de esa recepción (por referencia).
+    // Cuando hay recepción activa, se ignora el filtro de bodega (los productos recién
+    // llegan y pueden no tener stock aún en las bodegas elegidas).
+    if(RECEP.activa && RECEP.activa.refs){
+      if(!RECEP.activa.refs.includes(ref(r))) return false;
+    } else {
+      // Filtro base por bodega: producto debe tener stock en las bodegas elegidas
+      if(totalStk(r) <= 0) return false;
+    }
 
     // Filtros adicionales (chips)
     if(f==='incomplete') return est(r)!=='completo';
@@ -2079,6 +2119,9 @@ function enviarInformeCorreo(){
   const fecha=new Date().toLocaleString('es-CL');
   let cuerpo=`INFORME DE CORRECCIONES DE DATOS LOGÍSTICOS\n`;
   cuerpo+=`Generado: ${fecha}\n`;
+  if(RECEP.activa){
+    cuerpo+=`Recepción auditada: ${RECEP.activa.contacto} · Documento ${RECEP.activa.doc}\n`;
+  }
   cuerpo+=`Productos corregidos: ${refs.length}\n`;
   cuerpo+=`${'='.repeat(50)}\n\n`;
 
@@ -2109,6 +2152,229 @@ function enviarInformeCorreo(){
     toast('El informe es extenso; se abrirá recortado. Considera exportar XLSX también.','info');
   }
   window.location.href=mailto;
+}
+
+// ── RECEPCIÓN DE CONTENEDORES ──
+// Carga un reporte de transferencias (stock picking) y permite auditar por recepción,
+// eligiendo Contacto (proveedor) → Documento origen. Filtra el CPEDL a esos productos.
+//
+// Diseño preparado para migrar a automático (Opción C): parsearReporteRecep() recibe
+// una matriz de filas; hoy viene de un archivo, mañana podrá venir de una URL de Odoo.
+
+// Nombres de columna esperados en el reporte (tolerante a variaciones)
+function _colIdx(headers, nombres){
+  for(const n of nombres){
+    const i = headers.findIndex(h => String(h||'').trim().toLowerCase() === n.toLowerCase());
+    if(i>=0) return i;
+  }
+  return -1;
+}
+
+// Convierte la matriz de filas del reporte en la estructura RECEP.contactos
+function parsearReporteRecep(matriz){
+  if(!matriz || matriz.length<2) return {ok:false, msg:'El reporte no tiene filas de datos'};
+  const headers = matriz[0];
+  const iContacto = _colIdx(headers, ['Contacto']);
+  const iDoc      = _colIdx(headers, ['Documento origen','Documento de origen']);
+  const iRef      = _colIdx(headers, ['Movimientos de stock/Producto/Referencia interna','Referencia interna','Referencia']);
+  const iNom      = _colIdx(headers, ['Movimientos de stock/Nombre','Nombre producto','Nombre']);
+  const iDem      = _colIdx(headers, ['Movimientos de stock/Demanda','Demanda']);
+  const iFecha    = _colIdx(headers, ['Fecha de transferencia','Fecha']);
+
+  if(iContacto<0 || iDoc<0 || iRef<0){
+    return {ok:false, msg:'No se encontraron las columnas Contacto, Documento origen o Referencia interna'};
+  }
+
+  const contactos={};
+  let filas=0;
+  for(let r=1; r<matriz.length; r++){
+    const row=matriz[r];
+    if(!row) continue;
+    const contacto=String(row[iContacto]||'').trim();
+    const doc=String(row[iDoc]||'').trim();
+    const refI=String(row[iRef]||'').trim();
+    if(!contacto || !doc || !refI) continue;
+    const nomP = iNom>=0 ? String(row[iNom]||'').trim() : '';
+    const dem  = iDem>=0 ? (parseFloat(row[iDem])||0) : 0;
+    const fecha= iFecha>=0 ? row[iFecha] : '';
+
+    if(!contactos[contacto]) contactos[contacto]={docs:{}};
+    if(!contactos[contacto].docs[doc]) contactos[contacto].docs[doc]={refs:[], fecha:''};
+    const D=contactos[contacto].docs[doc];
+    // Evitar duplicar la misma referencia dentro del mismo documento
+    if(!D.refs.some(x=>x.ref===refI)){
+      D.refs.push({ref:refI, nom:nomP, demanda:dem});
+    }
+    if(fecha && !D.fecha) D.fecha=String(fecha).slice(0,10);
+    filas++;
+  }
+  const nContactos=Object.keys(contactos).length;
+  if(!nContactos) return {ok:false, msg:'No se detectaron recepciones válidas en el reporte'};
+  return {ok:true, contactos, filas, nContactos};
+}
+
+// Lee un archivo Excel/CSV y lo convierte en matriz de filas
+function leerArchivoRecep(file, cb){
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const data=new Uint8Array(e.target.result);
+      const wb=XLSX.read(data, {type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const matriz=XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+      cb(matriz);
+    }catch(err){
+      toast('No se pudo leer el archivo: '+err.message,'err');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function openRecepcion(){
+  const ov=document.createElement('div');
+  ov.className='overlay'; ov.style.alignItems='center';
+  const hayDatos=Object.keys(RECEP.contactos||{}).length>0;
+  const activa=RECEP.activa;
+
+  ov.innerHTML=`<div class="modal" style="border-radius:14px;max-width:560px">
+    <h2>📥 Auditoría por recepción</h2>
+    ${activa?`<div style="font-size:11px;color:var(--grn);background:var(--grn-bg);border:1px solid rgba(26,122,74,.25);border-radius:6px;padding:8px 10px;margin-bottom:12px">
+      ● Recepción activa: <strong>${esc(activa.contacto)}</strong> · Doc <strong>${esc(activa.doc)}</strong> · ${activa.refs.length} productos
+      <button class="btn btn-sm" style="margin-left:8px" id="rec-clear-activa">Quitar filtro</button></div>`:''}
+    <div style="font-size:11px;color:var(--mut);line-height:1.6;margin-bottom:12px">
+      Carga el reporte de transferencias (stock picking) para auditar los productos de una recepción específica. Elige el proveedor y el documento de origen.
+    </div>
+    <div style="margin-bottom:12px">
+      <label class="btn btn-sm btn-primary" style="cursor:pointer;display:inline-flex">
+        📁 Cargar reporte (Excel/CSV)
+        <input type="file" id="rec-file" accept=".xlsx,.xls,.csv" style="display:none">
+      </label>
+      ${hayDatos?`<span style="font-size:10px;color:var(--mut);margin-left:8px">Reporte cargado: ${Object.keys(RECEP.contactos).length} proveedor(es)</span>`:''}
+    </div>
+    <div id="rec-selectors" style="${hayDatos?'':'display:none'}">
+      <div class="fg fg1" style="margin-bottom:10px">
+        <div class="field"><label class="flabel">Contacto (proveedor)</label>
+          <select class="fi" id="rec-contacto"><option value="">— Elige un proveedor —</option></select>
+        </div>
+      </div>
+      <div class="fg fg1" style="margin-bottom:10px">
+        <div class="field"><label class="flabel">Documento origen</label>
+          <select class="fi" id="rec-doc"><option value="">— Elige primero un proveedor —</option></select>
+        </div>
+      </div>
+      <div id="rec-preview" style="font-size:11px;color:var(--mut);margin-bottom:12px"></div>
+    </div>
+    <div style="display:flex;gap:6px;justify-content:space-between;flex-wrap:wrap">
+      <button class="btn btn-sm" id="rec-forget" style="color:var(--red);${hayDatos?'':'display:none'}">🗑 Olvidar reporte</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm" id="rec-close">Cerrar</button>
+        <button class="btn btn-sm btn-primary" id="rec-audit" style="display:none">▶ Auditar esta recepción</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.onclick=e=>{if(e.target===ov)ov.remove();};
+  ov.querySelector('#rec-close').onclick=()=>ov.remove();
+
+  const selContacto=ov.querySelector('#rec-contacto');
+  const selDoc=ov.querySelector('#rec-doc');
+  const preview=ov.querySelector('#rec-preview');
+  const btnAudit=ov.querySelector('#rec-audit');
+
+  // Rellena el selector de contactos con lo cargado
+  function llenarContactos(){
+    const cts=Object.keys(RECEP.contactos||{}).sort();
+    selContacto.innerHTML='<option value="">— Elige un proveedor —</option>'+
+      cts.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    ov.querySelector('#rec-selectors').style.display = cts.length?'':'none';
+  }
+  if(hayDatos) llenarContactos();
+
+  // Carga de archivo
+  ov.querySelector('#rec-file').onchange=ev=>{
+    const file=ev.target.files[0]; if(!file) return;
+    leerArchivoRecep(file, matriz=>{
+      const res=parsearReporteRecep(matriz);
+      if(!res.ok){ toast(res.msg,'err'); return; }
+      RECEP.contactos=res.contactos;
+      saveRecep();
+      toast(`✓ ${res.nContactos} proveedor(es), ${res.filas} líneas cargadas`,'ok');
+      llenarContactos();
+      ov.querySelector('#rec-forget').style.display='';
+    });
+  };
+
+  // Contacto → documentos
+  selContacto.onchange=()=>{
+    const c=selContacto.value;
+    selDoc.innerHTML='<option value="">— Elige documento —</option>';
+    preview.innerHTML=''; btnAudit.style.display='none';
+    if(!c || !RECEP.contactos[c]) return;
+    const docs=Object.keys(RECEP.contactos[c].docs).sort();
+    selDoc.innerHTML='<option value="">— Elige documento —</option>'+
+      docs.map(d=>{
+        const nrefs=RECEP.contactos[c].docs[d].refs.length;
+        const fch=RECEP.contactos[c].docs[d].fecha||'';
+        return `<option value="${esc(d)}">${esc(d)} · ${nrefs} prod${fch?' · '+esc(fch):''}</option>`;
+      }).join('');
+  };
+
+  // Documento → vista previa
+  selDoc.onchange=()=>{
+    const c=selContacto.value, d=selDoc.value;
+    preview.innerHTML=''; btnAudit.style.display='none';
+    if(!c||!d) return;
+    const D=RECEP.contactos[c].docs[d];
+    const enCatalogo=D.refs.filter(x=>S.recs.some(r=>ref(r)===x.ref)).length;
+    preview.innerHTML=`<div style="background:var(--sur2);border:1px solid var(--brd);border-radius:6px;padding:8px 10px;line-height:1.7">
+      <strong>${D.refs.length}</strong> productos en el documento · <strong>${enCatalogo}</strong> encontrados en el catálogo
+      ${enCatalogo<D.refs.length?`<br><span style="color:var(--amb)">⚠ ${D.refs.length-enCatalogo} no están en el catálogo actual</span>`:''}</div>`;
+    btnAudit.style.display='';
+  };
+
+  // Activar auditoría de la recepción
+  btnAudit.onclick=()=>{
+    const c=selContacto.value, d=selDoc.value;
+    if(!c||!d) return;
+    const D=RECEP.contactos[c].docs[d];
+    RECEP.activa={ contacto:c, doc:d, refs:D.refs.map(x=>x.ref), fecha:D.fecha||'' };
+    saveRecep();
+    // Limpiar filtros de búsqueda y chip para ver toda la recepción
+    document.getElementById('search').value='';
+    applyFilter();
+    updateRecepBanner();
+    ov.remove();
+    toast(`▶ Auditando ${c} · ${d} (${D.refs.length} productos)`,'ok');
+  };
+
+  // Quitar filtro de recepción activa
+  const clearActiva=ov.querySelector('#rec-clear-activa');
+  if(clearActiva) clearActiva.onclick=()=>{
+    RECEP.activa=null; saveRecep(); applyFilter(); updateRecepBanner(); ov.remove();
+    toast('Filtro de recepción quitado','info');
+  };
+
+  // Olvidar todo el reporte cargado
+  ov.querySelector('#rec-forget').onclick=()=>{
+    if(confirm('¿Olvidar el reporte de recepciones cargado? Tendrás que volver a subirlo.')){
+      RECEP={ contactos:{}, activa:null }; saveRecep();
+      applyFilter(); updateRecepBanner(); ov.remove();
+      toast('Reporte de recepciones olvidado','info');
+    }
+  };
+}
+
+// Muestra/actualiza un indicador de la recepción activa en la barra de estado
+function updateRecepBanner(){
+  const btn=document.getElementById('btn-rec');
+  if(!btn) return;
+  if(RECEP.activa){
+    btn.classList.add('btn-primary');
+    btn.innerHTML=`📥 ${esc(RECEP.activa.doc)} (${RECEP.activa.refs.length})`;
+  } else {
+    btn.classList.remove('btn-primary');
+    btn.innerHTML='📥 Recepción';
+  }
 }
 
 // ── TOAST ──
