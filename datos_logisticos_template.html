@@ -1476,19 +1476,20 @@ function propGrupo(){
   saveProd();
   const r=S.recs.find(x=>ref(x)===S.cur); if(!r) return;
   const gk=gkey(r); let cnt=0;
-  // Hereda la marca del producto de origen (si es medido → medido; si estimado → estimado)
-  const marcaOrigen = r._med ? 'med' : 'est';
+  // Los hermanos SIEMPRE quedan como estimados (son copias derivadas, no mediciones),
+  // aunque el producto de referencia sea medido a mano.
   for(const x of S.recs){
     if(ref(x)===S.cur||gkey(x)!==gk) continue;
+    const snap=x.slice();               // estado antes, para el informe
     for(let i=7;i<=18;i++) x[i]=r[i];
     x[19]=calcEst(x); x._mod=true; x._vol=r._vol||0;
-    if(marcaOrigen==='med'){ x._med=true; x._est=false; }
-    else { x._est=true; x._med=false; }
-    setMark(x[0], marcaOrigen);
+    x._est=true; x._med=false;
+    setMark(x[0], 'est');
+    registrarCorreccion(x, snap, 'estimado');   // registra la propagación en el informe
     cnt++;
   }
   rebuildGrp(gk); updateProg2(); applyFilter();
-  toast(`🔁 Aplicado a ${cnt} del grupo`,'ok');
+  toast(`🔁 Aplicado a ${cnt} del grupo (estimados)`,'ok');
 }
 
 function propFamilia(){
@@ -1504,12 +1505,14 @@ function propFamilia(){
     if(!isRoll(x)) continue;
     const d=parseDims(med(x)); if(!d) continue;
     const m2=d.w*d.l/10000; if(!m2) continue;
+    const snap=x.slice();
     x[9]=+(grm2*m2/1000).toFixed(3); x[10]=d.w;
     if(alt_>0){x[11]=alt_;x[12]=alt_;}
     x[7]=TPK.indexOf('ROLLO'); x[13]=1;
-    x[19]=calcEst(x); x._mod=true; x._est=true;
+    x[19]=calcEst(x); x._mod=true; x._est=true; x._med=false;
     setMark(x[0], 'est');
     x._vol=alt_>0?+(Math.PI*Math.pow(alt_/200,2)*(d.w/100)).toFixed(6):0;
+    registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
   const gks=new Set(S.recs.filter(x=>sub(x)===sb).map(gkey));
@@ -1589,9 +1592,11 @@ function aplicarDiams(sb, medRef, alt1, L1){
     if(sub(x)!==sb) continue;
     if(med(x)===medRef) continue;        // no tocar la referencia
     const d=parseDims(med(x)); if(!d) continue;
+    const snap=x.slice();
     const dEst=+(alt1*Math.sqrt(d.l/L1)).toFixed(1);  // SIEMPRE recalcula según largo
-    x[11]=dEst; x[12]=dEst; x._est=true; x._mod=true; x[19]=calcEst(x);
+    x[11]=dEst; x[12]=dEst; x._est=true; x._med=false; x._mod=true; x[19]=calcEst(x);
     setMark(x[0], 'est');
+    registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
   const gks=new Set(S.recs.filter(x=>sub(x)===sb).map(gkey));
@@ -1709,6 +1714,7 @@ function aplicarSubfamilia(refRef, sb, medRef, grm2, alt1, L1, tk, mk, cap, pep,
     if(ref(x)===refRef) continue;        // SOLO la referencia exacta conserva sus valores
     const d=parseDims(med(x)); if(!d) continue;
     const m2=d.w*d.l/10000; if(!m2) continue;
+    const snap=x.slice();
 
     if(med(x)===medRef && rRef){
       // Hermano de MISMA medida estándar → copia idéntica de la referencia (campos 7..18)
@@ -1732,8 +1738,9 @@ function aplicarSubfamilia(refRef, sb, medRef, grm2, alt1, L1, tk, mk, cap, pep,
       x[14]=+(x[9]+x[15]).toFixed(3);
       x._vol=+(Math.PI*Math.pow(dEst/200,2)*(d.w/100)).toFixed(6);
     }
-    x._est=true; x._mod=true; x[19]=calcEst(x);
+    x._est=true; x._med=false; x._mod=true; x[19]=calcEst(x);
     setMark(x[0], 'est');
+    registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
   const gks=new Set(S.recs.filter(x=>sub(x)===sb).map(gkey));
@@ -1845,6 +1852,7 @@ function aplicarDescripcion(refRef, nameRef, medRef, grm2, alt1, L1, tk, mk, cap
     if(ref(x)===refRef) continue;        // SOLO la referencia exacta conserva sus valores
     const d=parseDims(med(x)); if(!d) continue;
     const m2=d.w*d.l/10000; if(!m2) continue;
+    const snap=x.slice();
 
     if(med(x)===medRef && rRef){
       // Hermano de MISMA medida → copia idéntica de la referencia
@@ -1864,8 +1872,9 @@ function aplicarDescripcion(refRef, nameRef, medRef, grm2, alt1, L1, tk, mk, cap
       x[14]=+(x[9]+x[15]).toFixed(3);
       x._vol=+(Math.PI*Math.pow(dEst/200,2)*(d.w/100)).toFixed(6);
     }
-    x._est=true; x._mod=true; x[19]=calcEst(x);
+    x._est=true; x._med=false; x._mod=true; x[19]=calcEst(x);
     setMark(x[0], 'est');
+    registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
   const gks=new Set(S.recs.filter(x=>nameBeforeMedida(nom(x))===nameRef).map(gkey));
@@ -2031,19 +2040,19 @@ function refreshBodChips(){
 }
 
 // ── INFORME DE CORRECCIONES ──
-// Muestra las correcciones registradas (valor antes/después) y permite enviarlas
-// por correo (abre el cliente de correo con el informe ya redactado).
+// Muestra un resumen de correcciones y, si hay recepción activa, la tabla completa
+// de la recepción con demanda y una observación de las que tienen diferencias.
 function openInforme(){
   const refs=Object.keys(AUDIT);
   const ov=document.createElement('div');
   ov.className='overlay'; ov.style.alignItems='center';
 
-  if(!refs.length){
+  if(!refs.length && !RECEP.activa){
     ov.innerHTML=`<div class="modal" style="border-radius:14px;max-width:440px">
       <h2>📋 Informe de correcciones</h2>
       <div style="font-size:12px;color:var(--mut);line-height:1.7;margin-bottom:14px">
-        Aún no hay correcciones registradas en esta sesión.<br>
-        Cuando corrijas y guardes productos durante una auditoría, aquí aparecerá el detalle de qué cambió.</div>
+        Aún no hay correcciones registradas ni recepción activa.<br>
+        Carga una recepción y audita productos para generar el informe.</div>
       <div style="display:flex;justify-content:flex-end">
         <button class="btn btn-sm" id="inf-close">Cerrar</button>
       </div></div>`;
@@ -2053,32 +2062,75 @@ function openInforme(){
     return;
   }
 
-  // Construir filas del informe
+  // ── Resumen de diferencias (todas las correcciones registradas) ──
   let totalCambios=0;
-  const filas=[];
+  const resumenFilas=[];
   for(const rf of refs){
     const a=AUDIT[rf];
-    const campos=Object.values(a.campos||{});
-    for(const c of campos){
+    for(const c of Object.values(a.campos||{})){
       totalCambios++;
-      const signo = c.despues>c.antes ? '+' : '';
-      const difTxt = c.antes>0 ? `${signo}${(((c.despues-c.antes)/c.antes)*100).toFixed(0)}%` : 'nuevo';
-      const difCol = Math.abs(c.dif)>=25 ? 'var(--red)' : Math.abs(c.dif)>=10 ? 'var(--amb)' : 'var(--mut)';
-      filas.push(`<tr style="border-bottom:1px solid var(--brd)">
-        <td style="padding:4px 6px;font-size:10px">${esc(a.nom).slice(0,28)}</td>
-        <td style="padding:4px 6px;font-size:10px;color:var(--mut)">${esc(rf)}</td>
-        <td style="padding:4px 6px;font-size:10px">${c.label}</td>
-        <td style="padding:4px 6px;font-size:10px;text-align:right;color:var(--mut)">${c.antes||'—'}</td>
-        <td style="padding:4px 6px;font-size:10px;text-align:right;font-weight:600">${c.despues||'—'}</td>
-        <td style="padding:4px 6px;font-size:10px;text-align:right;font-weight:600;color:${difCol}">${difTxt}</td>
+      const signo=c.despues>c.antes?'+':'';
+      const difTxt=c.antes>0?`${signo}${(((c.despues-c.antes)/c.antes)*100).toFixed(0)}%`:'nuevo';
+      const difCol=Math.abs(c.dif)>=25?'var(--red)':Math.abs(c.dif)>=10?'var(--amb)':'var(--mut)';
+      const tipo=a.origen==='estimado'?'<span style="font-size:8px;color:var(--acc)">E</span>':'<span style="font-size:8px;color:var(--grn)">M</span>';
+      resumenFilas.push(`<tr style="border-bottom:1px solid var(--brd)">
+        <td style="padding:3px 6px;font-size:10px">${esc(a.nom).slice(0,26)} ${tipo}</td>
+        <td style="padding:3px 6px;font-size:10px;color:var(--mut)">${esc(rf)}</td>
+        <td style="padding:3px 6px;font-size:10px">${c.label}</td>
+        <td style="padding:3px 6px;font-size:10px;text-align:right;color:var(--mut)">${c.antes||'—'}</td>
+        <td style="padding:3px 6px;font-size:10px;text-align:right;font-weight:600">${c.despues||'—'}</td>
+        <td style="padding:3px 6px;font-size:10px;text-align:right;font-weight:600;color:${difCol}">${difTxt}</td>
       </tr>`);
     }
   }
 
-  ov.innerHTML=`<div class="modal" style="border-radius:14px;max-width:640px">
-    <h2>📋 Informe de correcciones · ${refs.length} producto${refs.length!==1?'s':''}</h2>
-    <div style="font-size:11px;color:var(--mut);margin-bottom:10px">${totalCambios} corrección${totalCambios!==1?'es':''} registrada${totalCambios!==1?'s':''} en esta sesión de auditoría.</div>
-    <div style="max-height:44vh;overflow-y:auto;border:1px solid var(--brd);border-radius:8px;margin-bottom:12px">
+  // ── Tabla completa de la recepción (si hay recepción activa) ──
+  let tablaRecep='';
+  let tituloRecep='';
+  if(RECEP.activa){
+    const c=RECEP.activa.contacto, d=RECEP.activa.doc;
+    tituloRecep=`<div style="font-size:11px;color:var(--grn);background:var(--grn-bg);border:1px solid rgba(26,122,74,.25);border-radius:6px;padding:7px 10px;margin-bottom:10px">📥 Recepción: <strong>${esc(c)}</strong> · Doc <strong>${esc(d)}</strong></div>`;
+    // Recuperar la lista de productos de la recepción con su demanda
+    const D=(RECEP.contactos[c]&&RECEP.contactos[c].docs[d])?RECEP.contactos[c].docs[d]:null;
+    if(D){
+      const filasR=D.refs.map(item=>{
+        const a=AUDIT[item.ref];
+        const audited=!!a;
+        // Observación: campos con diferencia
+        let obs='—', obsCol='var(--mut)';
+        if(audited){
+          const difs=Object.values(a.campos||{});
+          if(difs.length){
+            const maxDif=Math.max(...difs.map(x=>Math.abs(x.dif)));
+            obs=difs.map(x=>`${x.label} ${x.despues>x.antes?'+':''}${(((x.despues-x.antes)/(x.antes||1))*100).toFixed(0)}%`).join(', ');
+            obsCol=maxDif>=25?'var(--red)':maxDif>=10?'var(--amb)':'var(--grn)';
+          } else { obs='Sin diferencias'; obsCol='var(--grn)'; }
+        }
+        return `<tr style="border-bottom:1px solid var(--brd)">
+          <td style="padding:3px 6px;font-size:10px">${esc(item.nom||item.ref).slice(0,32)}</td>
+          <td style="padding:3px 6px;font-size:10px;color:var(--mut)">${esc(item.ref)}</td>
+          <td style="padding:3px 6px;font-size:10px;text-align:right">${item.demanda||'—'}</td>
+          <td style="padding:3px 6px;font-size:10px;text-align:center">${audited?'✓':'○'}</td>
+          <td style="padding:3px 6px;font-size:9.5px;color:${obsCol}">${esc(obs)}</td>
+        </tr>`;
+      }).join('');
+      const nAud=D.refs.filter(x=>AUDIT[x.ref]).length;
+      tablaRecep=`<div style="font-size:11px;color:var(--mut);margin:12px 0 6px">Tabla de la recepción · ${D.refs.length} productos · ${nAud} auditados</div>
+        <div style="max-height:32vh;overflow-y:auto;border:1px solid var(--brd);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="position:sticky;top:0;background:var(--sur2);color:var(--mut);font-size:9px;text-transform:uppercase">
+            <th style="padding:5px 6px;text-align:left">Producto</th>
+            <th style="padding:5px 6px;text-align:left">Ref</th>
+            <th style="padding:5px 6px;text-align:right">Demanda</th>
+            <th style="padding:5px 6px;text-align:center">Audit.</th>
+            <th style="padding:5px 6px;text-align:left">Observación</th>
+          </tr></thead><tbody>${filasR}</tbody></table></div>`;
+    }
+  }
+
+  const resumenBloque = totalCambios? `
+    <div style="font-size:11px;color:var(--mut);margin-bottom:6px">Resumen de diferencias · ${totalCambios} cambio${totalCambios!==1?'s':''} en ${refs.length} producto${refs.length!==1?'s':''}</div>
+    <div style="max-height:30vh;overflow-y:auto;border:1px solid var(--brd);border-radius:8px;margin-bottom:6px">
       <table style="width:100%;border-collapse:collapse">
         <thead><tr style="position:sticky;top:0;background:var(--sur2);color:var(--mut);font-size:9px;text-transform:uppercase">
           <th style="padding:5px 6px;text-align:left">Producto</th>
@@ -2087,11 +2139,15 @@ function openInforme(){
           <th style="padding:5px 6px;text-align:right">Antes</th>
           <th style="padding:5px 6px;text-align:right">Ahora</th>
           <th style="padding:5px 6px;text-align:right">Δ</th>
-        </tr></thead>
-        <tbody>${filas.join('')}</tbody>
-      </table>
-    </div>
-    <div style="display:flex;gap:6px;justify-content:space-between;align-items:center;flex-wrap:wrap">
+        </tr></thead><tbody>${resumenFilas.join('')}</tbody></table></div>`
+    : `<div style="font-size:11px;color:var(--mut);margin-bottom:6px">Aún no hay diferencias registradas en esta recepción.</div>`;
+
+  ov.innerHTML=`<div class="modal" style="border-radius:14px;max-width:680px">
+    <h2>📋 Informe de auditoría</h2>
+    ${tituloRecep}
+    ${resumenBloque}
+    ${tablaRecep}
+    <div style="display:flex;gap:6px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-top:12px">
       <button class="btn btn-sm" id="inf-clear" style="color:var(--red)">🗑 Limpiar registro</button>
       <div style="display:flex;gap:6px">
         <button class="btn btn-sm" id="inf-close">Cerrar</button>
@@ -2114,42 +2170,70 @@ function openInforme(){
 // Genera el cuerpo del informe en texto y abre el cliente de correo (mailto).
 function enviarInformeCorreo(){
   const refs=Object.keys(AUDIT);
-  if(!refs.length){toast('No hay correcciones para enviar','err');return;}
+  if(!refs.length && !RECEP.activa){toast('No hay nada que enviar','err');return;}
 
   const fecha=new Date().toLocaleString('es-CL');
-  let cuerpo=`INFORME DE CORRECCIONES DE DATOS LOGÍSTICOS\n`;
+  let cuerpo=`INFORME DE AUDITORÍA DE DATOS LOGÍSTICOS\n`;
   cuerpo+=`Generado: ${fecha}\n`;
   if(RECEP.activa){
-    cuerpo+=`Recepción auditada: ${RECEP.activa.contacto} · Documento ${RECEP.activa.doc}\n`;
+    cuerpo+=`Recepción: ${RECEP.activa.contacto} · Documento ${RECEP.activa.doc}\n`;
   }
-  cuerpo+=`Productos corregidos: ${refs.length}\n`;
-  cuerpo+=`${'='.repeat(50)}\n\n`;
+  cuerpo+=`${'='.repeat(52)}\n\n`;
 
-  for(const rf of refs){
-    const a=AUDIT[rf];
-    cuerpo+=`▪ ${a.nom}\n`;
-    cuerpo+=`  Ref: ${rf}  |  ${a.sub||'—'}  |  ${a.med||'—'}\n`;
-    for(const c of Object.values(a.campos||{})){
-      const signo = c.despues>c.antes ? '+' : '';
-      const difTxt = c.antes>0 ? ` (${signo}${(((c.despues-c.antes)/c.antes)*100).toFixed(0)}%)` : ' (nuevo)';
-      cuerpo+=`   · ${c.label}: ${c.antes||'—'} → ${c.despues||'—'}${difTxt}\n`;
+  // 1) Resumen de diferencias
+  if(refs.length){
+    cuerpo+=`RESUMEN DE DIFERENCIAS (${refs.length} productos)\n`;
+    cuerpo+=`${'-'.repeat(52)}\n`;
+    for(const rf of refs){
+      const a=AUDIT[rf];
+      const marca=a.origen==='estimado'?'[E]':'[M]';
+      cuerpo+=`${marca} ${a.nom}  (${rf})\n`;
+      for(const c of Object.values(a.campos||{})){
+        const signo=c.despues>c.antes?'+':'';
+        const difTxt=c.antes>0?` (${signo}${(((c.despues-c.antes)/c.antes)*100).toFixed(0)}%)`:' (nuevo)';
+        cuerpo+=`    ${c.label}: ${c.antes||'—'} -> ${c.despues||'—'}${difTxt}\n`;
+      }
+      cuerpo+=`\n`;
     }
-    cuerpo+=`\n`;
   }
-  cuerpo+=`${'='.repeat(50)}\n`;
+
+  // 2) Tabla de la recepción con demanda y observación
+  if(RECEP.activa){
+    const c=RECEP.activa.contacto, d=RECEP.activa.doc;
+    const D=(RECEP.contactos[c]&&RECEP.contactos[c].docs[d])?RECEP.contactos[c].docs[d]:null;
+    if(D){
+      const nAud=D.refs.filter(x=>AUDIT[x.ref]).length;
+      cuerpo+=`TABLA DE LA RECEPCIÓN (${D.refs.length} productos · ${nAud} auditados)\n`;
+      cuerpo+=`${'-'.repeat(52)}\n`;
+      cuerpo+=`Producto | Ref | Demanda | Auditado | Observación\n`;
+      for(const item of D.refs){
+        const a=AUDIT[item.ref];
+        let obs='-';
+        if(a){
+          const difs=Object.values(a.campos||{});
+          obs = difs.length
+            ? difs.map(x=>`${x.label} ${x.despues>x.antes?'+':''}${(((x.despues-x.antes)/(x.antes||1))*100).toFixed(0)}%`).join(', ')
+            : 'Sin diferencias';
+        }
+        cuerpo+=`${(item.nom||item.ref).slice(0,30)} | ${item.ref} | ${item.demanda||'-'} | ${a?'SI':'NO'} | ${obs}\n`;
+      }
+      cuerpo+=`\n`;
+    }
+  }
+
+  cuerpo+=`${'='.repeat(52)}\n`;
   cuerpo+=`Generado con CPEDL — Capturador y Propagador Eficiente de Datos Logísticos\n`;
 
-  const asunto=`Informe de correcciones datos logísticos — ${new Date().toLocaleDateString('es-CL')} (${refs.length} productos)`;
-  // Destinatario configurable: se recuerda en localStorage
+  const rotulo = RECEP.activa ? ` ${RECEP.activa.doc}` : '';
+  const asunto=`Informe auditoría datos logísticos${rotulo} — ${new Date().toLocaleDateString('es-CL')}`;
   let dest = localStorage.getItem('dlog_inf_dest') || '';
   dest = prompt('Correo del destinatario del informe:', dest) || '';
   if(!dest.trim()){ toast('Envío cancelado (sin destinatario)','info'); return; }
   localStorage.setItem('dlog_inf_dest', dest.trim());
 
   const mailto=`mailto:${encodeURIComponent(dest.trim())}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
-  // mailto tiene límite de longitud; si es muy largo, avisar
   if(mailto.length>1900){
-    toast('El informe es extenso; se abrirá recortado. Considera exportar XLSX también.','info');
+    toast('El informe es extenso; el correo puede abrirse recortado. Considera exportar XLSX.','info');
   }
   window.location.href=mailto;
 }
