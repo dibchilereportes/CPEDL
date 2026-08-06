@@ -1095,7 +1095,15 @@ function persistFieldsSafe(){
 }
 
 function syncDiam(changed){
-  if(document.getElementById('f-tpk')?.value!=='ROLLO') return;
+  // Al escribir a mano en Ancho/Alto, quitar la clase 'auto' para que los
+  // autocálculos (textil, etc.) respeten el valor ingresado manualmente.
+  const el=document.getElementById(changed==='anc'?'f-anc':'f-alt');
+  if(el) el.classList.remove('auto');
+  if(document.getElementById('f-tpk')?.value!=='ROLLO'){
+    // Fuera de rollos: solo persistir el valor manual (no sincronizar diámetro)
+    persistFields();
+    return;
+  }
   const fa=document.getElementById('f-anc'), fh=document.getElementById('f-alt');
   if(!fa||!fh) return;
   if(changed==='anc') fh.value=fa.value; else fa.value=fh.value;
@@ -1297,7 +1305,12 @@ function onCajaTextilChange(){
   const flrg=document.getElementById('f-lrg'), fanc=document.getElementById('f-anc'), falt=document.getElementById('f-alt');
   if(flrg){ flrg.value=u.lu; flrg.classList.add('auto'); }
   if(fanc){ fanc.value=u.au; fanc.classList.add('auto'); }
-  if(falt){ falt.value=u.hu; falt.classList.add('auto'); }
+  // El alto se respeta si el usuario lo ingresó a mano (campo sin clase 'auto', con
+  // valor plausible >1 cm). Un valor residual <=1 cm (ej. el 0.5 del grosor default
+  // que quedaba del bug) se considera no confiable y se recalcula siempre.
+  const altActual = falt ? nn(falt.value) : 0;
+  const altManual = falt && falt.value!=='' && !falt.classList.contains('auto') && altActual>1;
+  if(falt && !altManual){ falt.value=u.hu; falt.classList.add('auto'); }
 
   // 2) Peso del cartón (por superficie de la caja) y peso neto unitario.
   //    SOLO se calcula/sobrescribe el peso cuando hay peso bruto ingresado.
@@ -1404,6 +1417,27 @@ function saveProd(){
   const r=S.recs.find(x=>ref(x)===S.cur); if(!r) return;
   // Snapshot del estado ANTES de modificar, para el informe de correcciones
   const snapAntes = r.slice();
+  // Para textil en caja, re-deducir las dimensiones unitarias desde la caja JUSTO antes
+  // de leer los campos, para garantizar que el alto/largo/ancho unitarios queden
+  // persistidos aunque el autocálculo no se haya disparado tras el último cambio.
+  const tkNow=document.getElementById('f-tpk')?.value||'';
+  const mkNow=document.getElementById('f-mpk')?.value||'';
+  if(lin(r)==='TEXTIL HOGAR' && tkNow==='CAJA' && (mkNow==='CARTON'||mkNow==='CARTÓN')){
+    const Lc=nn(document.getElementById('f-lpk')?.value);
+    const Ac=nn(document.getElementById('f-apk')?.value);
+    const Hc=nn(document.getElementById('f-hpk')?.value);
+    const capC=nn(document.getElementById('f-cpk')?.value)||1;
+    const pilasC=+(document.getElementById('f-pilas')?.value||r._pilas||1);
+    const grosorMmC=nn(document.getElementById('f-grosor')?.value);
+    const grosorCmC=grosorMmC>0 ? grosorMmC/10 : CARTON_GROSOR_CM_DEFAULT;
+    if(Lc>0 && Ac>0 && Hc>0 && capC>=1){
+      const u=dimsUnitDesdeCaja(Lc, Ac, Hc, capC, pilasC, grosorCmC);
+      const flrg=document.getElementById('f-lrg'), fanc=document.getElementById('f-anc'), falt=document.getElementById('f-alt');
+      if(flrg && u.lu>0){ flrg.value=u.lu; }
+      if(fanc && u.au>0){ fanc.value=u.au; }
+      if(falt && u.hu>0){ falt.value=u.hu; }
+    }
+  }
   const tk_=document.getElementById('f-tpk')?.value||'';
   const lrg_=nn(document.getElementById('f-lrg')?.value);
   const anc_=nn(document.getElementById('f-anc')?.value);
@@ -1922,13 +1956,77 @@ function consolidarNetos(){
   return arreglados;
 }
 
+// Sincroniza el "después" del registro de auditoría con los valores actuales del
+// array (tras consolidar dimensiones). Así el informe muestra los valores finales
+// corregidos y no los que quedó el bug. El "antes" (valor original de Odoo) se conserva.
+function sincronizarAuditConArray(){
+  for(const rf of Object.keys(AUDIT)){
+    const r=S.recs.find(x=>ref(x)===rf);
+    if(!r) continue;
+    const a=AUDIT[rf];
+    if(!a.campos) continue;
+    for(const idx of Object.keys(a.campos)){
+      const i=+idx;
+      const nuevoDespues=+(r[i]||0);
+      const antes=+(a.campos[i].antes||0);
+      a.campos[i].despues=nuevoDespues;
+      a.campos[i].dif = antes>0 ? +(Math.abs(nuevoDespues-antes)/antes*100).toFixed(1) : (nuevoDespues>0?100:0);
+    }
+    // Si tras la corrección un campo quedó igual al original, se puede eliminar
+    for(const idx of Object.keys(a.campos)){
+      const c=a.campos[idx];
+      if(+c.antes===+c.despues) delete a.campos[idx];
+    }
+    // Si ya no quedan campos con diferencia, quitar el producto del informe
+    if(!Object.keys(a.campos).length) delete AUDIT[rf];
+  }
+  saveAudit();
+}
+
+// ── CONSOLIDACIÓN DE DIMENSIONES UNITARIAS DE TEXTIL EN CAJA ──
+// Repara en lote los textiles en caja marcados: re-deduce largo/ancho/alto unitarios
+// desde las dimensiones de la caja (masterpack) + capacidad + pilas. Corrige los que
+// quedaron con alto mal guardado (p.ej. 0.5) por el bug de persistencia anterior.
+// Respeta un alto ingresado a mano solo si el registro no fue tocado por el bug
+// (no hay forma de distinguirlo, así que recalcula todos los textiles marcados).
+function consolidarDimsTextil(){
+  let arreglados=0;
+  for(const r of S.recs){
+    const marcado = r._med || r._est || MARKS[r[0]];
+    if(!marcado) continue;
+    if(lin(r)!=='TEXTIL HOGAR') continue;
+    const tk_=TPK[r[7]]||'', mk_=MPK[r[8]]||'';
+    if(tk_!=='CAJA') continue;
+    if(!(mk_==='CARTON'||mk_==='CARTÓN')) continue;
+    const Lc=r[16]||0, Ac=r[17]||0, Hc=r[18]||0;   // dimensiones de la caja (masterpack)
+    const cap=r[13]||1;
+    const pilas=r._pilas||1;
+    if(Lc>0 && Ac>0 && Hc>0 && cap>=1){
+      const grosorCm=(r._grosorMm!=null && r._grosorMm>0) ? r._grosorMm/10 : CARTON_GROSOR_CM_DEFAULT;
+      const u=dimsUnitDesdeCaja(Lc, Ac, Hc, cap, pilas, grosorCm);
+      // Solo corrige si el alto actual es sospechoso (<=1 cm) o difiere del calculado
+      const altoActual=r[12]||0;
+      if(u.hu>0 && (altoActual<=1 || Math.abs(altoActual-u.hu)>0.05)){
+        r[10]=u.lu; r[11]=u.au; r[12]=u.hu;
+        r[19]=calcEst(r);
+        arreglados++;
+      }
+    }
+  }
+  return arreglados;
+}
+
 // ── EXPORT XLSX (23 columnas originales de la maestra + ID primero) ──
 // Los decimales van como números reales; Excel los muestra con coma según
 // la configuración regional es-CL. Odoo los importa correctamente.
 function exportXlsx(){
-  // Antes de exportar, repara netos faltantes que sean calculables (no pierde datos)
-  const rep=consolidarNetos();
-  if(rep>0) toast(`🔧 ${rep} netos recalculados antes de exportar`,'info');
+  // Antes de exportar, repara netos y dimensiones textiles faltantes/erróneos
+  const repN=consolidarNetos();
+  const repD=consolidarDimsTextil();
+  // Actualiza el registro de auditoría con las dimensiones corregidas, para que
+  // el informe/reporte muestre los valores finales y no los del bug (0.5).
+  if(repD>0) sincronizarAuditConArray();
+  if(repN>0 || repD>0) toast(`🔧 ${repN} netos y ${repD} dimensiones recalculadas`,'info');
   // Exporta TODO lo que tenga marca medido/estimado (persistente en localStorage)
   // o haya sido modificado en esta sesión. Así no se pierden los cambios de días
   // anteriores ni los de productos editados antes en la misma sesión.
@@ -2151,6 +2249,7 @@ function openInforme(){
       <button class="btn btn-sm" id="inf-clear" style="color:var(--red)">🗑 Limpiar registro</button>
       <div style="display:flex;gap:6px">
         <button class="btn btn-sm" id="inf-close">Cerrar</button>
+        ${RECEP.activa?`<button class="btn btn-sm" id="inf-excel">📊 Reporte Excel</button>`:''}
         <button class="btn btn-sm btn-primary" id="inf-mail">✉ Enviar por correo</button>
       </div>
     </div>
@@ -2165,6 +2264,8 @@ function openInforme(){
     }
   };
   ov.querySelector('#inf-mail').onclick=()=>enviarInformeCorreo();
+  const btnExcel=ov.querySelector('#inf-excel');
+  if(btnExcel) btnExcel.onclick=()=>{ ov.remove(); exportarReporteRecep(); };
 }
 
 // Genera el cuerpo del informe en texto y abre el cliente de correo (mailto).
@@ -2236,6 +2337,84 @@ function enviarInformeCorreo(){
     toast('El informe es extenso; el correo puede abrirse recortado. Considera exportar XLSX.','info');
   }
   window.location.href=mailto;
+}
+
+// Genera el reporte de recepción como archivo Excel (completo, sin límite de tamaño)
+// y luego abre el correo con un resumen. Incluye TODOS los productos de la recepción
+// con demanda, medidas logísticas, empaque, marca de cambios y detalle antes/después.
+function exportarReporteRecep(){
+  if(!RECEP.activa){ toast('No hay recepción activa','err'); return; }
+  const c=RECEP.activa.contacto, d=RECEP.activa.doc;
+  const D=(RECEP.contactos[c]&&RECEP.contactos[c].docs[d])?RECEP.contactos[c].docs[d]:null;
+  if(!D){ toast('No se encontró la recepción','err'); return; }
+
+  // Antes de generar, consolida dimensiones/netos para que el reporte muestre valores finales
+  consolidarNetos();
+  const repD=consolidarDimsTextil();
+  if(repD>0) sincronizarAuditConArray();
+
+  const rows=D.refs.map(item=>{
+    const r=S.recs.find(x=>ref(x)===item.ref);
+    const a=AUDIT[item.ref];
+    // Detalle de cambios (si los hubo)
+    let cambios='';
+    if(a && a.campos){
+      cambios=Object.values(a.campos).map(x=>{
+        const signo=x.despues>x.antes?'+':'';
+        const pct=x.antes>0?` (${signo}${(((x.despues-x.antes)/x.antes)*100).toFixed(0)}%)`:' (nuevo)';
+        return `${x.label}: ${x.antes||'—'}→${x.despues||'—'}${pct}`;
+      }).join(' · ');
+    }
+    const cambio = a ? (Object.keys(a.campos||{}).length? 'SÍ':'sin dif') : 'no auditado';
+    return {
+      'Referencia': item.ref,
+      'Nombre': item.nom || (r?nom(r):''),
+      'Demanda': item.demanda||'',
+      'Peso neto (kg)': r?kg(r):'',
+      'Largo cm': r?lrg(r):'',
+      'Ancho cm': r?anc(r):'',
+      'Alto cm': r?alt(r):'',
+      'Tipo empaque': r?tpk(r):'',
+      'Material': r?mpk(r):'',
+      'Capacidad': r?cpk(r):'',
+      'Peso bruto (kg)': r?pbpk(r):'',
+      'Caja L×A×H': r?`${lpk(r)}×${apk(r)}×${hpk(r)}`:'',
+      '¿Cambió?': cambio,
+      'Detalle de cambios': cambios
+    };
+  });
+
+  const COLS=['Referencia','Nombre','Demanda','Peso neto (kg)','Largo cm','Ancho cm','Alto cm',
+    'Tipo empaque','Material','Capacidad','Peso bruto (kg)','Caja L×A×H','¿Cambió?','Detalle de cambios'];
+  const ws=XLSX.utils.json_to_sheet(rows, {header:COLS});
+  // Anchos de columna para legibilidad
+  ws['!cols']=[{wch:16},{wch:32},{wch:9},{wch:12},{wch:9},{wch:9},{wch:9},{wch:12},{wch:10},{wch:10},{wch:13},{wch:14},{wch:12},{wch:50}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Recepcion');
+  const stamp=new Date().toISOString().slice(0,10).replace(/-/g,'');
+  const docSafe=String(d).replace(/[^\w-]/g,'_');
+  XLSX.writeFile(wb, `reporte_recepcion_${docSafe}_${stamp}.xlsx`);
+
+  const nAud=D.refs.filter(x=>AUDIT[x.ref]).length;
+  const nCambios=D.refs.filter(x=>AUDIT[x.ref]&&Object.keys(AUDIT[x.ref].campos||{}).length).length;
+  toast(`↓ Reporte Excel: ${D.refs.length} productos, ${nCambios} con cambios`,'ok');
+
+  // Luego abre el correo con un resumen breve (dentro del límite de mailto)
+  setTimeout(()=>{
+    const fecha=new Date().toLocaleDateString('es-CL');
+    let cuerpo=`Reporte de recepción adjunto (Excel).\n\n`;
+    cuerpo+=`Recepción: ${c} · Documento ${d}\n`;
+    cuerpo+=`Fecha: ${fecha}\n`;
+    cuerpo+=`Productos: ${D.refs.length} · Auditados: ${nAud} · Con cambios: ${nCambios}\n\n`;
+    cuerpo+=`Adjunto el archivo Excel con el detalle completo: demanda, medidas logísticas, empaque y los cambios detectados en cada producto.\n\n`;
+    cuerpo+=`(Recuerda adjuntar el archivo reporte_recepcion_${docSafe}_${stamp}.xlsx que se acaba de descargar.)`;
+    const asunto=`Reporte recepción ${d} — ${c} (${fecha})`;
+    let dest=localStorage.getItem('dlog_inf_dest')||'';
+    dest=prompt('Correo del destinatario (el Excel ya se descargó, adjúntalo al correo):', dest)||'';
+    if(!dest.trim()){ toast('Excel descargado. Correo cancelado.','info'); return; }
+    localStorage.setItem('dlog_inf_dest', dest.trim());
+    window.location.href=`mailto:${encodeURIComponent(dest.trim())}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
+  }, 600);
 }
 
 // ── RECEPCIÓN DE CONTENEDORES ──
