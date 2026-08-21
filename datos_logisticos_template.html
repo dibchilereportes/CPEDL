@@ -398,6 +398,7 @@ const BOD_KEY = 'dlog_bod_v3';
 const MARKS_KEY = 'dlog_marks_v1';   // marcas de medido/estimado por referencia
 const AUDIT_KEY = 'dlog_audit_v1';   // registro de correcciones para el informe
 const RECEP_KEY = 'dlog_recep_v1';   // recepciones cargadas (reporte de contenedores)
+const DATAVALS_KEY = 'dlog_dataVals_v1'; // valores corregidos (sobreviven a reload/regeneración)
 
 // Recepciones cargadas desde el reporte de transferencias/stock picking.
 // Estructura: { contactos:{ contacto:{ docs:{ docOrigen:{ refs:[{ref,nom,demanda}], fecha } } } }, activa:{contacto,doc} }
@@ -409,6 +410,26 @@ function loadRecep(){
 }
 function saveRecep(){
   try { localStorage.setItem(RECEP_KEY, JSON.stringify(RECEP)); } catch(e){}
+}
+
+// ── VALORES CORREGIDOS PERSISTENTES ──
+// CRÍTICO: sin esto, los datos que escribes (peso, largo, ancho, alto, empaque...)
+// solo viven en la memoria de la página. Si recargas, cierras el navegador o el sistema
+// regenera datos_logisticos.html con datos frescos de Odoo, esos valores se PIERDEN
+// aunque la marca M/E siga mostrando el producto como auditado. Este store guarda los
+// campos 7..19 de cada producto tocado, y se reaplican al cargar la página.
+let DATAVALS = {};
+function loadDataVals(){
+  try { DATAVALS = JSON.parse(localStorage.getItem(DATAVALS_KEY)||'{}'); }
+  catch(e){ DATAVALS = {}; }
+}
+function saveDataVals(){
+  try { localStorage.setItem(DATAVALS_KEY, JSON.stringify(DATAVALS)); } catch(e){}
+}
+// Guarda los campos editables (índices 7 a 19) de un registro corregido.
+function persistRecordValues(r){
+  DATAVALS[r[0]] = r.slice(7,20);
+  saveDataVals();
 }
 
 // Registro de correcciones de auditoría en localStorage.
@@ -545,10 +566,17 @@ setTimeout(function() {
   loadMarks();
   loadAudit();   // carga el registro de correcciones para el informe
   loadRecep();   // carga recepciones cargadas previamente
+  loadDataVals(); // carga los VALORES corregidos (peso/medidas/empaque) guardados
   for(const r of S.recs){
     const m = MARKS[r[0]];
     if(m==='med'){ r._med=true; r._est=false; }
     else if(m==='est'){ r._est=true; r._med=false; }
+    // Reaplica los valores corregidos guardados (sobrescribe lo recién inyectado de Odoo)
+    const dv = DATAVALS[r[0]];
+    if(dv && dv.length){
+      for(let i=0;i<dv.length;i++){ r[7+i]=dv[i]; }
+      r[19]=calcEst(r);
+    }
   }
 
   try {
@@ -1465,6 +1493,7 @@ function saveProd(){
   r._est=false;        // guardado manual = medido (valida y quita marca de estimado)
   r._med=true;         // marca explícita de dato medido a mano
   setMark(r[0], 'med'); // persiste en localStorage
+  persistRecordValues(r); // persiste los VALORES (peso/medidas/empaque) — sobrevive a reload
   registrarCorreccion(r, snapAntes, 'medido');   // registra el cambio para el informe
 
   rebuildGrp(gkey(r)); updateProg2(); applyFilter(); renderDetail(S.cur);
@@ -1519,6 +1548,7 @@ function propGrupo(){
     x[19]=calcEst(x); x._mod=true; x._vol=r._vol||0;
     x._est=true; x._med=false;
     setMark(x[0], 'est');
+    persistRecordValues(x);
     registrarCorreccion(x, snap, 'estimado');   // registra la propagación en el informe
     cnt++;
   }
@@ -1546,6 +1576,7 @@ function propFamilia(){
     x[19]=calcEst(x); x._mod=true; x._est=true; x._med=false;
     setMark(x[0], 'est');
     x._vol=alt_>0?+(Math.PI*Math.pow(alt_/200,2)*(d.w/100)).toFixed(6):0;
+    persistRecordValues(x);
     registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
@@ -1630,6 +1661,7 @@ function aplicarDiams(sb, medRef, alt1, L1){
     const dEst=+(alt1*Math.sqrt(d.l/L1)).toFixed(1);  // SIEMPRE recalcula según largo
     x[11]=dEst; x[12]=dEst; x._est=true; x._med=false; x._mod=true; x[19]=calcEst(x);
     setMark(x[0], 'est');
+    persistRecordValues(x);
     registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
@@ -1774,6 +1806,7 @@ function aplicarSubfamilia(refRef, sb, medRef, grm2, alt1, L1, tk, mk, cap, pep,
     }
     x._est=true; x._med=false; x._mod=true; x[19]=calcEst(x);
     setMark(x[0], 'est');
+    persistRecordValues(x);
     registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
@@ -1908,6 +1941,7 @@ function aplicarDescripcion(refRef, nameRef, medRef, grm2, alt1, L1, tk, mk, cap
     }
     x._est=true; x._med=false; x._mod=true; x[19]=calcEst(x);
     setMark(x[0], 'est');
+    persistRecordValues(x);
     registrarCorreccion(x, snap, 'estimado');
     cnt++;
   }
@@ -2534,10 +2568,22 @@ function openRecepcion(){
         <button class="btn btn-sm btn-primary" id="rec-audit" style="display:none">▶ Auditar esta recepción</button>
       </div>
     </div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:10px;line-height:1.5">💾 Los datos que corriges quedan guardados en este navegador aunque recargues la página. Una vez que reimportes el XLSX a Odoo y confirmes que quedó correcto, puedes <a href="#" id="clear-datavals" style="color:var(--acc)">limpiar los valores locales guardados</a> para evitar que sigan sobreescribiendo los datos frescos de Odoo.</div>
   </div>`;
   document.body.appendChild(ov);
   ov.onclick=e=>{if(e.target===ov)ov.remove();};
   ov.querySelector('#rec-close').onclick=()=>ov.remove();
+
+  const clearDV=ov.querySelector('#clear-datavals');
+  if(clearDV) clearDV.onclick=(e)=>{
+    e.preventDefault();
+    const n=Object.keys(DATAVALS).length;
+    if(!n){ toast('No hay valores locales guardados','info'); return; }
+    if(confirm(`¿Limpiar los ${n} valores corregidos guardados localmente? Hazlo SOLO después de confirmar que el XLSX se reimportó correctamente a Odoo. Las marcas M/E y el informe NO se borran.`)){
+      DATAVALS={}; saveDataVals();
+      toast('Valores locales limpiados','ok');
+    }
+  };
 
   const selContacto=ov.querySelector('#rec-contacto');
   const selDoc=ov.querySelector('#rec-doc');
