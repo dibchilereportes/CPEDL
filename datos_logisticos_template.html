@@ -531,6 +531,12 @@ const estDot = r => EST_DOT[r[19]] || 'v';
 const gkey = r => `${sub(r)}||${med(r)}`;
 const isRoll = r => tpk(r)==='ROLLO' || (lin(r)==='ALFOMBRAS' && tpk(r)!=='CAJA' && tpk(r)!=='SACO');
 const isFloor= r => lin(r)==='FLOORING';
+// FLOORING vendido en ROLLO (unidad de venta = 1 m²): mismo modelo físico que alfombra
+// rollo (desecho plástico por superficie del cilindro), pero la capacidad representa
+// m² totales del rollo y el peso neto queda expresado en kg/m² (no por pieza).
+const FLOORING_ROLLO_FAM = ['PISOS ROLLOS','ROLLOS ALFOMBRA','ROLLOS COMERCIALES','ROLLOS PASTO'];
+const famOf = r => { const ex=S.extra&&S.extra[ref(r)]; return ex&&ex.fam ? ex.fam : ''; };
+const esFlooringRollo = r => lin(r)==='FLOORING' && FLOORING_ROLLO_FAM.includes(famOf(r));
 
 // ── INIT ──
 // Show loading state immediately
@@ -759,7 +765,8 @@ function buildDetail(r){
   const diamSugs=isRoll(r)&&rollW?(S.diam[String(rollW)]||[]):[];
 
   let ptype='otro',ptlabel=ln||'Producto';
-  if(isRoll(r)){ptype='rollo';ptlabel='Alfombra ROLLO';}
+  if(esFlooringRollo(r)){ptype='rollo_floor';ptlabel='Flooring ROLLO (m²)';}
+  else if(isRoll(r)){ptype='rollo';ptlabel='Alfombra ROLLO';}
   else if(isFloor(r)){ptype='m2';ptlabel='Flooring / M²';}
   else if(tk==='CAJA'){ptype='caja';ptlabel='Caja / Textil';}
 
@@ -825,7 +832,15 @@ function buildDetail(r){
   }
 
   // Dims form
-  const hintConv=ptype==='rollo'
+  const hintConv=ptype==='rollo_floor'
+    ?`<div style="font-size:11px;color:var(--acc);padding:8px 10px;background:var(--acc-bg);border-radius:6px;margin-bottom:10px;line-height:1.7">
+        <b>📋 Carga guiada de FLOORING en ROLLO (m²):</b><br>
+        <b>1.</b> Largo y Ancho unitarios se fijan en <b>100×100 cm</b> (la unidad de venta es 1 m²). Ingresa el Alto si quieres registrar el espesor.<br>
+        <b>2.</b> Confirma Tipo ROLLO · Material PLÁSTICO<br>
+        <b>3.</b> Baja a <b>Embalaje</b> e ingresa la <b>Capacidad</b> = m² totales que cubre el rollo<br>
+        <b>4.</b> Ingresa <b>Largo/Ancho/Alto pack</b>: Largo = eje del rollo (ancho del material), Ancho = diámetro (Alto se copia solo)<br>
+        <b>5.</b> Ingresa el <b>Peso Bruto</b> del rollo completo → calcula el plástico (por superficie del cilindro) y el peso neto en kg/m²</div>`
+    :ptype==='rollo'
     ?`<div style="font-size:11px;color:var(--acc);padding:8px 10px;background:var(--acc-bg);border-radius:6px;margin-bottom:10px;line-height:1.7">
         <b>📋 Carga guiada de alfombra ROLLO:</b><br>
         <b>1.</b> Largo ya autocompletado = ${dims?dims.w:'ancho'} cm (ancho de la alfombra)<br>
@@ -888,7 +903,7 @@ function buildDetail(r){
 
   // Embalaje form
   // Para alfombras sin tipo aún, presugerir ROLLO / PLASTICO / capacidad 1
-  const alfSinTipo = ln==='ALFOMBRAS' && !tk;
+  const alfSinTipo = (ln==='ALFOMBRAS' || esFlooringRollo(r)) && !tk;
   const tkSel = alfSinTipo ? 'ROLLO' : tk;
   const mkSel = alfSinTipo ? 'PLASTICO' : mk;
   const capSel = alfSinTipo ? 1 : cpk(r);
@@ -911,15 +926,15 @@ function buildDetail(r){
       </div>
       <div class="field"><label class="flabel">Capacidad${alfSinTipo?' <span class="atag">sugerido</span>':''}</label>
         <input type="number" inputmode="decimal" step="1" class="fi${alfSinTipo?' auto':cpk(r)?' has-value':''}"
-          id="f-cpk" value="${capSel||''}" placeholder="${ptype==='rollo'?'1':'ej: 6'}" oninput="persistFields();syncMasterpack();onCajaTextilChange()">
-        <span class="fhint">${ptype==='m2'?'en m²':ptype==='rollo'?'gral. 1':''}</span>
+          id="f-cpk" value="${capSel||''}" placeholder="${ptype==='rollo'?'1':ptype==='rollo_floor'?'m² del rollo':'ej: 6'}" oninput="persistFields();syncMasterpack();onCajaTextilChange();onFlooringRolloChange()">
+        <span class="fhint">${ptype==='m2'?'en m²':ptype==='rollo'?'gral. 1':ptype==='rollo_floor'?'m² totales del rollo':''}</span>
       </div>
-      <div class="field"><label class="flabel">Peso Bruto (kg)${ptype==='rollo'?' <span class="req">*</span>':''}</label>
+      <div class="field"><label class="flabel">Peso Bruto (kg)${(ptype==='rollo'||ptype==='rollo_floor')?' <span class="req">*</span>':''}</label>
         <input type="number" inputmode="decimal" step="0.001" class="fi${pbpk(r)?' has-value':''}"
-          id="f-pbpk" value="${pbpk(r)||''}" placeholder="${ptype==='rollo'?'peso rollo c/ plástico':''}" oninput="onPbChange()">
-        <span class="fhint">${ptype==='rollo'?'peso del rollo con plástico':''}</span>
+          id="f-pbpk" value="${pbpk(r)||''}" placeholder="${ptype==='rollo'?'peso rollo c/ plástico':ptype==='rollo_floor'?'peso rollo completo':''}" oninput="onPbChange();onFlooringRolloChange()">
+        <span class="fhint">${ptype==='rollo'?'peso del rollo con plástico':ptype==='rollo_floor'?'peso total del rollo con plástico':''}</span>
       </div>
-      <div class="field"><label class="flabel">P. envase (kg)${(ptype==='rollo'||isCartonSel)?' <span class="atag">auto</span>':''}</label>
+      <div class="field"><label class="flabel">P. envase (kg)${(ptype==='rollo'||ptype==='rollo_floor'||isCartonSel)?' <span class="atag">auto</span>':''}</label>
         <input type="number" inputmode="decimal" step="0.001" class="fi${pepk(r)?' has-value':''}"
           id="f-pepk" value="${pepk(r)||''}" oninput="onPepkChange()">
         <span class="fhint">${isAutoEnv?'♻ se calcula solo':''}</span>
@@ -963,13 +978,13 @@ function buildDetail(r){
     </div>
     <div class="fg fg3">
       <div class="field"><label class="flabel">Largo pack (cm)</label>
-        <input type="number" inputmode="decimal" step="0.1" class="fi${lpk(r)?' has-value':''}" id="f-lpk" value="${lpk(r)||''}" oninput="persistFields();onCajaTextilChange()">
+        <input type="number" inputmode="decimal" step="0.1" class="fi${lpk(r)?' has-value':''}" id="f-lpk" value="${lpk(r)||''}" oninput="persistFields();onCajaTextilChange();onFlooringRolloChange()">
       </div>
       <div class="field"><label class="flabel">Ancho pack (cm)</label>
-        <input type="number" inputmode="decimal" step="0.1" class="fi${apk(r)?' has-value':''}" id="f-apk" value="${apk(r)||''}" oninput="persistFields();onCajaTextilChange()">
+        <input type="number" inputmode="decimal" step="0.1" class="fi${apk(r)?' has-value':''}" id="f-apk" value="${apk(r)||''}" oninput="persistFields();onCajaTextilChange();onFlooringRolloChange()">
       </div>
       <div class="field"><label class="flabel">Alto pack (cm)</label>
-        <input type="number" inputmode="decimal" step="0.1" class="fi${hpk(r)?' has-value':''}" id="f-hpk" value="${hpk(r)||''}" oninput="persistFields();onCajaTextilChange()">
+        <input type="number" inputmode="decimal" step="0.1" class="fi${hpk(r)?' has-value':''}" id="f-hpk" value="${hpk(r)||''}" oninput="persistFields();onCajaTextilChange();onFlooringRolloChange()">
       </div>
     </div>
     <div id="pb-check" style="margin-top:8px"></div>
@@ -1056,7 +1071,7 @@ function dimsComp(r){
 // ── FIELD LISTENERS ──
 function setupListeners(r){ setTimeout(()=>{
   const kgAntes = r[9]||0;
-  calcVol();calcGrm2(r);onPbChange();onMpkChange();toggleTextilUI();onCajaTextilChange();
+  calcVol();calcGrm2(r);onPbChange();onMpkChange();toggleTextilUI();onCajaTextilChange();onFlooringRolloChange();
   // Sincroniza el array con lo que quedó visible en el formulario (sin pisar con ceros),
   // por si el neto u otros vienen del render y aún no estaban en el registro.
   persistFieldsSafe();
@@ -1127,8 +1142,11 @@ function syncDiam(changed){
   // autocálculos (textil, etc.) respeten el valor ingresado manualmente.
   const el=document.getElementById(changed==='anc'?'f-anc':'f-alt');
   if(el) el.classList.remove('auto');
-  if(document.getElementById('f-tpk')?.value!=='ROLLO'){
-    // Fuera de rollos: solo persistir el valor manual (no sincronizar diámetro)
+  const rCur=S.recs.find(x=>ref(x)===S.cur);
+  const esFR=rCur && esFlooringRollo(rCur);
+  if(document.getElementById('f-tpk')?.value!=='ROLLO' || esFR){
+    // Fuera de rollos (o flooring en m², donde Ancho=área y Alto=espesor, no diámetro):
+    // solo persistir el valor manual, sin sincronizar
     persistFields();
     return;
   }
@@ -1173,8 +1191,10 @@ function calcVol(){
   const anc_=nn(document.getElementById('f-anc')?.value);
   const alt_=nn(document.getElementById('f-alt')?.value);
   if(!lrg_||!alt_){el.innerHTML='';return;}
+  const rCur=S.recs.find(x=>ref(x)===S.cur);
+  const esFR=rCur && esFlooringRollo(rCur);
   let vol,formula;
-  if(tk_==='ROLLO'){
+  if(tk_==='ROLLO' && !esFR){
     vol=Math.PI*Math.pow(alt_/200,2)*(lrg_/100);
     formula=`π×(${alt_}/200)²×(${lrg_}/100)`;
   } else {
@@ -1274,7 +1294,7 @@ function onPepkChange(){
   onPbChange();
 }
 
-function onTpkChange(){ persistFields(); calcVol(); syncMasterpack(); toggleTextilUI(); }
+function onTpkChange(){ persistFields(); calcVol(); syncMasterpack(); toggleTextilUI(); onFlooringRolloChange(); }
 function onMpkChange(){
   persistFieldsSafe();
   const mk=document.getElementById('f-mpk')?.value;
@@ -1284,6 +1304,7 @@ function onMpkChange(){
   if(wl) wl.textContent = mk==='CARTON' ? 'Cartón de empaque' : 'Desecho plástico';
   toggleTextilUI();
   onPbChange();
+  onFlooringRolloChange();
 }
 
 // Muestra/oculta la fila de pilas según si es TEXTIL HOGAR + CAJA + CARTÓN
@@ -1437,6 +1458,58 @@ function onLimpPilasChange(){
   const r=S.recs.find(x=>ref(x)===S.cur);
   if(r){ r._limpilas=+(document.getElementById('f-limpilas')?.value||1); }
   onEmpaqueLimpChange();
+}
+
+// FLUJO FLOORING EN ROLLO (unidad = m²): mismo modelo físico que alfombra rollo
+// (desecho plástico por superficie del cilindro), pero la capacidad son los m²
+// totales del rollo y el peso neto resultante queda en kg/m².
+// Largo/Ancho unitarios se fijan en 100×100 cm (la unidad de venta es 1 m²); el
+// Alto unitario queda libre para el espesor (opcional, no se autocompleta).
+// El EMPAQUE (pack) es el cilindro real: Largo pack = eje del rollo (ancho del
+// material), Ancho pack = diámetro (se copia automático a Alto pack).
+function onFlooringRolloChange(){
+  const r=S.recs.find(x=>ref(x)===S.cur); if(!r) return;
+  if(!esFlooringRollo(r)) return;
+  const tk_=document.getElementById('f-tpk')?.value||'';
+  if(tk_!=='ROLLO') return;
+  const mk_=document.getElementById('f-mpk')?.value||'';
+  const isPlastico = mk_==='PLASTICO'||mk_==='PLÁSTICO';
+
+  // 1) Largo/Ancho unitarios = 100×100 cm (solo si aún están vacíos; no pisa valores propios)
+  const flrg=document.getElementById('f-lrg'), fanc=document.getElementById('f-anc');
+  if(flrg && flrg.value===''){ flrg.value=100; flrg.classList.add('auto'); }
+  if(fanc && fanc.value===''){ fanc.value=100; fanc.classList.add('auto'); }
+
+  // 2) Sincroniza el diámetro del cilindro: Ancho pack → Alto pack
+  const Lc=nn(document.getElementById('f-lpk')?.value);   // eje del rollo (ancho del material)
+  const Dc=nn(document.getElementById('f-apk')?.value);   // diámetro del rollo enrollado
+  const fhpk=document.getElementById('f-hpk');
+  if(fhpk && Dc>0){ fhpk.value=Dc; fhpk.classList.add('auto'); }
+
+  const cap=nn(document.getElementById('f-cpk')?.value);   // m² totales del rollo
+  const pb=nn(document.getElementById('f-pbpk')?.value);   // peso bruto del rollo completo
+  const pbc=document.getElementById('pb-check');
+
+  if(!isPlastico || !Lc || !Dc || cap<=0 || pb<=0){
+    persistFieldsSafe();
+    return;
+  }
+
+  // 3) Desecho plástico por superficie del cilindro (misma fórmula que alfombra rollo)
+  const pPlastico = pesoPlasticoKg(Dc, Lc);
+  const netoTotal = +(pb - pPlastico).toFixed(3);
+  const pesoM2 = +(netoTotal/cap).toFixed(3);
+
+  const fkg=document.getElementById('f-kg'), fpep=document.getElementById('f-pepk');
+  if(fkg && pesoM2>0){ fkg.value=pesoM2; fkg.classList.add('auto'); r[9]=pesoM2; }
+  if(fpep){ fpep.value=pPlastico; fpep.classList.add('auto'); r[15]=pPlastico; }
+
+  const wv=document.getElementById('waste-val');
+  if(wv) wv.innerHTML=`♻ ${pPlastico} kg/rollo (calc. por superficie)`;
+  if(pbc) pbc.innerHTML=`<div class="pb-ok ok">✓ Rollo de ${cap} m² → peso neto <strong>${pesoM2} kg/m²</strong> · plástico ${pPlastico} kg</div>`;
+
+  persistFieldsSafe();
+  calcVol();
 }
 
 // ── SAVE ──
@@ -1970,6 +2043,12 @@ function consolidarNetos(){
     if(ln_==='ALFOMBRAS' && tk_==='ROLLO' && isPlastico && lrg_>0 && alt_>0){
       envase = pesoPlasticoKg(alt_, lrg_);
       neto   = +(pb - envase).toFixed(3);
+    } else if(esFlooringRollo(r) && tk_==='ROLLO' && isPlastico && cap>0){
+      const Lc=r[16]||0, Dc=r[17]||0;
+      if(Lc>0 && Dc>0){
+        envase = pesoPlasticoKg(Dc, Lc);
+        neto   = +((pb - envase)/cap).toFixed(3);
+      }
     } else if(ln_==='TEXTIL HOGAR' && tk_==='CAJA' && isCarton){
       const Lc=r[16]||0, Ac=r[17]||0, Hc=r[18]||0;
       if(Lc>0 && Ac>0 && Hc>0 && cap>=1){
