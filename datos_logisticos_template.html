@@ -196,6 +196,7 @@ body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:10
       <span class="chip" onclick="setChip('TEXTIL HOGAR',this)">Textil</span>
       <span class="chip" onclick="setChip('LIMPIAPIES',this)">Limpiapies</span>
       <span class="chip" onclick="setChip('withstock',this)">Con stock</span>
+      <span class="chip" onclick="setChip('nostock',this)">Sin stock</span>
       <span class="chip" onclick="setChip('withsales',this)">Con ventas</span>
       <span class="chip" onclick="setChip('medido',this)">✓ Medidos</span>
       <span class="chip" onclick="setChip('estimado',this)">📏 Estimados</span>
@@ -653,7 +654,8 @@ function applyFilter(){
 
   // Sin bodegas seleccionadas → no mostrar nada (pedir elegir bodega),
   // EXCEPTO si hay una recepción activa (esa define su propia lista de productos).
-  if(!S.activeBod.size && !(RECEP.activa && RECEP.activa.refs)){
+  // EXCEPTO con el chip 'Sin stock' (permite registrar productos sin stock que se reciben físicamente).
+  if(!S.activeBod.size && f!=='nostock' && !(RECEP.activa && RECEP.activa.refs)){
     S.filtered = [];
     S.rIdx = 0;
     document.getElementById('res-list').innerHTML =
@@ -676,7 +678,7 @@ function applyFilter(){
     // llegan y pueden no tener stock aún en las bodegas elegidas).
     if(RECEP.activa && RECEP.activa.refs){
       if(!RECEP.activa.refs.includes(ref(r))) return false;
-    } else {
+    } else if(f!=='nostock'){
       // Filtro base por bodega: producto debe tener stock en las bodegas elegidas
       if(totalStk(r) <= 0) return false;
     }
@@ -684,6 +686,7 @@ function applyFilter(){
     // Filtros adicionales (chips)
     if(f==='incomplete') return est(r)!=='completo';
     if(f==='withstock')  return totalStk(r)>0;
+    if(f==='nostock')    return totalStk(r)<=0;   // sin stock en las bodegas elegidas (o todo el catálogo si no hay bodegas)
     if(f==='withsales')  return !!vntFor(r);
     if(f==='medido')     return !!r._med;
     if(f==='estimado')   return !!r._est;
